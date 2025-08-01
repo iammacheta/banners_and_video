@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prebid + GPT: Video (in‑player) + Banner — combined example</title>
+
+    <!-- Google Publisher Tag -->
+    <script async src="https://securepubads.g.doubleclick.net/tag/js/gpt.js" crossorigin="anonymous"></script>
+
+    <!-- Prebid build (video-capable; also supports banner bidders used below) -->
+    <script async
+        src="https://cdn.jsdelivr.net/gh/iammacheta/prebidjs-video-code@aeabe6d09ed170762d0e0293c597168e4945bf51/prebid.js"></script>
+
+    <!-- VideoJS + IMA -->
+    <link href="https://vjs.zencdn.net/7.20.2/video-js.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/videojs-contrib-ads/6.9.0/videojs-contrib-ads.css"
+        rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/7.20.2/video.min.js"></script>
+    <script src="https://imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/videojs-contrib-ads/6.9.0/videojs-contrib-ads.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/videojs-ima/1.11.0/videojs.ima.js"></script>
+
+    <style>
+        :root {
+            --bg: #0f1115;
+            --ink: #e6e6e6;
+            --muted: #9aa0a6;
+            --card: #171a21;
+            --accent: #2b6cb0;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 16px;
+        }
+
+        header,
+        footer {
+            padding: 12px 16px;
+            background: var(--card);
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+        }
+
+        main {
+            display: grid;
+            grid-template-columns: 1fr 360px;
+            gap: 16px;
+            padding: 0 16px 24px;
+        }
+
+        @media (max-width: 980px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--card);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .stack {
+            display: grid;
+            gap: 12px;
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .video-wrap {
+            width: 640px;
+            max-width: 100%;
+            aspect-ratio: 16/9;
+            margin: 0 auto;
+        }
+
+        .video-wrap .video-js,
+        .video-wrap video {
+            width: 100%;
+            height: 100%;
+        }
+
+        .banners {
+            display: grid;
+            gap: 12px;
+            justify-items: center;
+        }
+
+        .banner-slot {
+            width: 336px;
+            height: 280px;
+            display: grid;
+            place-items: center;
+            background: #11161d;
+            border: 1px dashed #2b2f3a;
+            border-radius: 8px;
+        }
+
+        code.kv {
+            background: #0e1420;
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <strong>Combined demo:</strong> Video (in‑player, Prebid + IMA) + Banner (GPT) with separate refresh logic
+    </header>
+
+    <main>
+        <!-- Left: Player -->
+        <section class="panel stack">
+            <div class="video-wrap">
+                <div id="div-gpt-ad-prebid-video-0"></div>
+                <video-js id="player" class="vjs-big-play-centered" autoplay muted playsinline></video-js>
+            </div>
+            <div class="muted">
+                Video preroll refreshes using its own logic (retry on <code class="kv">adserror</code>/<code
+                    class="kv">videoBidError</code>, new bid after <code class="kv">adend</code>).
+            </div>
+        </section>
+
+        <!-- Right: Banners -->
+        <aside class="panel stack">
+            <div class="banners">
+                <div id="div_display_m" class="banner-slot"><span class="muted">/web‑destiny‑2‑display‑m</span></div>
+                <div id="div_display_l" class="banner-slot"><span class="muted">/web‑destiny‑2‑display‑l</span></div>
+            </div>
+            <div class="muted">
+                Banner refresh: every <strong>30s</strong>, independently from video.
+            </div>
+        </aside>
+    </main>
+
+    <footer class="muted">
+        Replace the example media and ad unit codes with yours as needed.
+    </footer>
+
+    <script>
+        /*****************************************************************
+         * Shared globals / queues
+         *****************************************************************/
+        window.googlefc = window.googlefc || {};
+        googlefc.callbackQueue = googlefc.callbackQueue || [];
+
+        var googletag = window.googletag = window.googletag || {};
+        googletag.cmd = googletag.cmd = googletag.cmd || [];
+
+        var pbjs = window.pbjs = window.pbjs || {};
+        pbjs.que = pbjs.que || [];
+
+        /*****************************************************************
+         * Banner ad units (from your banner example)
+         *****************************************************************/
+        const div_display_m_sizes = [
+            [300, 250], [336, 280], [300, 50], [320, 100], [300, 100],
+            [250, 250], [200, 200]
+        ];
+        const div_display_l_sizes = [
+            [300, 250], [336, 280], [320, 50], [320, 100],
+            [300, 50], [300, 100], [250, 360], [250, 250], [200, 200]
+        ];
+
+        const bannerAdUnits = [
+            {
+                code: '/21974715207/web-destiny-2-display-m',
+                mediaTypes: { banner: { sizes: div_display_m_sizes } },
+                bids: [
+                    { bidder: 'pubmatic', params: { publisherId: '165261', adSlot: '6141440' } },
+                    { bidder: 'appnexus', params: { placementId: 34122281, allowSmallerSizes: true, position: 'above' } },
+                    { bidder: 'adagio', params: { organizationId: '1458', site: 'mobalytics-gg' } },
+                    { bidder: 'oms', params: { publisherId: '21048' } },
+                    { bidder: 'sovrn', params: { tagid: '1256209' } },
+                    { bidder: 'openx', params: { unit: '561445368', delDomain: 'mobalytics-d.openx.net' } },
+                    { bidder: 'onetag', params: { pubId: '80ac484cd63fd7e', ext: { placement_name: 'web-destiny-2-display-m' } } },
+                    { bidder: 'smartadserver', params: { siteId: 682899, pageId: 2035035, formatId: 135866 } },
+                    { bidder: 'gumgum', params: { zone: 'bdppvphq', slot: '1155240' } },
+                    { bidder: 'inmobi', params: { plc: '10000167297' } },
+                    { bidder: 'ogury', params: { adUnitId: 'wd-hb-stdb-mobaly-mobal-6xnjqbcd90zb', assetKey: 'OGY-1D9A57637CDD' } },
+                    { bidder: 'iionads', params: { host: 'ads-2479t.iionads.com', adUnitId: 42187, adUnitType: 'banner', publisherId: '2235709' } }
+                ],
+                ortb2Imp: { ext: { data: { divId: 'web-destiny-2-display-m', placement: 'sidebar-1' } } }
+            },
+            {
+                code: '/21974715207/web-destiny-2-display-l',
+                mediaTypes: { banner: { sizes: div_display_l_sizes } },
+                bids: [
+                    { bidder: 'pubmatic', params: { publisherId: '165261', adSlot: '6141441' } },
+                    { bidder: 'appnexus', params: { placementId: 34122285, allowSmallerSizes: true } },
+                    { bidder: 'adagio', params: { organizationId: '1458', site: 'mobalytics-gg' } },
+                    { bidder: 'oms', params: { publisherId: '21048' } },
+                    { bidder: 'sovrn', params: { tagid: '1256210' } },
+                    { bidder: 'openx', params: { unit: '561445369', delDomain: 'mobalytics-d.openx.net' } },
+                    { bidder: 'onetag', params: { pubId: '80ac484cd63fd7e', ext: { placement_name: 'web-destiny-2-display-l' } } },
+                    { bidder: 'smartadserver', params: { siteId: 682899, pageId: 2035036, formatId: 135867 } },
+                    { bidder: 'gumgum', params: { zone: 'bdppvphq', slot: '1273326' } },
+                    { bidder: 'inmobi', params: { plc: '10000167298' } },
+                    { bidder: 'iionads', params: { host: 'ads-2479t.iionads.com', adUnitId: 42187, adUnitType: 'banner', publisherId: '2235709' } }
+                ],
+                ortb2Imp: { ext: { data: { divId: 'web-destiny-2-display-l', placement: 'sidebar-2' } } }
+            }
+        ];
+
+        /*****************************************************************
+         * Video ad unit (from your video example)
+         *****************************************************************/
+        const videoAdUnit = {
+            code: 'div-gpt-ad-prebid-video-0',
+            mediaTypes: {
+                video: {
+                    context: 'instream',
+                    plcmt: 2,
+                    mimes: ['video/mp4'],
+                    startdelay: 0,
+                    maxduration: 30,
+                    protocols: [2, 3, 5, 6, 7, 8],
+                    linearity: 1,
+                    placement: 3,
+                    playbackmethod: [6],
+                    api: [2]
+                }
+            },
+            video: { divId: 'player' },
+            bids: [
+                { bidder: 'appnexus', params: { placementId: 36028569 } },
+                { bidder: 'adagio', params: { organizationId: '1458', site: 'mobalytics-gg' } },
+                { bidder: 'oms', params: { publisherId: '21048' } },
+                { bidder: 'onetag', params: { pubId: '80ac484cd63fd7e', ext: { placement_name: 'web-video' } } },
+                { bidder: 'unruly', params: { siteId: 287980 } },
+                { bidder: 'vidazoo', params: { cId: '67ee7a23e3011c328b218c68', pId: '59ac17c192832d0011283fe3', subDomain: 'exchange' } },
+                { bidder: 'openx', params: { unit: '562882193', delDomain: 'mobalytics-d.openx.net' } },
+                { bidder: 'pubmatic', params: { publisherId: '165261', adSlot: '6135387' } },
+                { bidder: 'sovrn', params: { tagid: '1282326' } },
+                { bidder: 'gumgum', params: { zone: 'og42aben', slot: '1315516' } },
+                { bidder: 'rubicon', params: { accountId: 7780, siteId: 87184, zoneId: 412394, video: { language: 'en' } } },
+                { bidder: 'iionads', params: { host: 'ads-247co.iionads.com', adUnitId: 42236, adUnitType: 'Video', publisherId: '2235800' } },
+                { bidder: 'medianet', params: { cid: '8CUC2405Y', crid: '688008280' } }
+            ]
+        };
+
+        /*****************************************************************
+         * GPT: define banner slots
+         *****************************************************************/
+        let slotM, slotL;
+        googletag.cmd.push(function () {
+            googletag.pubads().disableInitialLoad();
+            slotM = googletag.defineSlot('/21974715207/web-destiny-2-display-m', div_display_m_sizes, 'div_display_m').addService(googletag.pubads());
+            slotL = googletag.defineSlot('/21974715207/web-destiny-2-display-l', div_display_l_sizes, 'div_display_l').addService(googletag.pubads());
+            googletag.pubads().collapseEmptyDivs();
+            googletag.pubads().enableSingleRequest();
+            googletag.enableServices();
+        });
+
+        /*****************************************************************
+         * Prebid config (merged)
+         *****************************************************************/
+        const customPriceBuckets = {
+            buckets: [
+                { max: 3, increment: 0.01 },
+                { max: 5, increment: 0.05 },
+                { max: 9, increment: 0.10 },
+                { max: 40, increment: 0.50 },
+                { max: 100, increment: 10.00 }
+            ]
+        };
+
+        pbjs.que.push(function () {
+            pbjs.bidderSettings = { standard: { storageAllowed: true } };
+
+            pbjs.setConfig({
+                floors: { enforcement: { enforcePBS: false, enforceJS: true }, default: 0.02 },
+                useBidCache: true,
+                minBidCacheTTL: 10,
+                eventHistoryTTL: 10,
+                enableSendAllBids: false,
+                timeoutBuffer: 400,
+                enableTIDs: true,
+                priceGranularity: customPriceBuckets,
+                consentManagement: {
+                    gdpr: {
+                        cmpApi: "iab",
+                        timeout: 1000,
+                        actionTimeout: 10000,
+                        defaultGdprScope: true,
+                        allowAuctionWithoutConsent: true,
+                        rules: [
+                            { purpose: "storage", enforcePurpose: true, enforceVendor: true, vendorExceptions: ["uid2"] },
+                            { purpose: "basicAds", enforcePurpose: true, enforceVendor: true, vendorExceptions: ["uid2"] },
+                            { purpose: "personalizedAds", enforcePurpose: true, enforceVendor: true, vendorExceptions: ["uid2"] },
+                            { purpose: "measurement", enforcePurpose: true, enforceVendor: true },
+                            { purpose: "transmitPreciseGeo", enforcePurpose: true }
+                        ]
+                    },
+                    usp: { cmpApi: "iab", timeout: 1000 }
+                },
+                gptPreAuction: { enabled: true },
+                currency: {
+                    adServerCurrency: 'USD',
+                    granularityMultiplier: 1,
+                    defaultRates: { 'EUR': 1.10, 'GBP': 1.30 },
+                    conversionRateFile: 'https://cdn.jsdelivr.net/gh/prebid/currency-file@1/latest.json'
+                },
+                deviceAccess: true,
+                userSync: {
+                    filterSettings: { iframe: { bidders: '*', filter: 'include' } },
+                    userIds: [
+                        { name: "sharedId", storage: { type: "cookie", name: "_sharedid", expires: 365 } },
+                        { name: "uid2", params: { emailHash: "NU/pdbyygiVmxYIr/X9+7jwqS4tAQslQeMTRK8A7AL4=", serverPublicKey: "UID2-X-P-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoECNf4b0xQ5+LKMVe9iLELdbxlwCoZ3T3sZ3ZpvSWznJ58bzMz8XQhOiaMXBrqEig6rK/ut7irZI7esUWvVZIA==", subscriptionId: "TG5mQTPCsw" } },
+                        { name: "criteo" },
+                        {
+                            name: "id5Id",
+                            params: { partner: 1779, externalModuleUrl: "https://cdn.id5-sync.com/api/1.0/id5PrebidModule.js", pd: "NU/pdbyygiVmxYIr/X9+7jwqS4tAQslQeMTRK8A7AL4=" },
+                            storage: { type: "html5", name: "id5id", expires: 90, refreshInSeconds: 7200 }
+                        },
+                        { name: "lotamePanoramaId", params: { clientId: "17999" } }
+                    ],
+                    encryptedSignalSources: { sources: [{ source: ['uidapi.com', 'pubcid.org', 'id5-sync.com', 'crwdcntrl.net'], encrypt: false }], registerDelay: 3000 },
+                    auctionDelay: 1000
+                },
+                realTimeData: {
+                    dataProviders: [{ name: 'adagio', params: { organizationId: '1458', site: 'mobalytics-gg', placementSource: 'ortb' } }]
+                },
+                video: {
+                    providers: [{
+                        divId: 'player',
+                        vendorCode: 2, // Video.js
+                        playerConfig: {
+                            params: {
+                                adPluginConfig: { adLabel: 'Prebid Video', numRedirects: 10 },
+                                vendorConfig: { controls: true, autoplay: true, preload: 'auto', muted: true }
+                            }
+                        },
+                        adServer: {
+                            vendorCode: 'gam',
+                            baseAdTagUrl:
+                                'https://pubads.g.doubleclick.net/gampad/ads?' +
+                                'iu=/21974715207/prebid_cache_video_adunit' +
+                                '&sz=400x225' +
+                                '&impl=s&gdfp_req=1' +
+                                '&env=vp' +
+                                '&output=xml_vast4' +
+                                '&unviewed_position_start=1'
+                        }
+                    }]
+                },
+                cache: { url: 'https://prebid.adnxs.com/pbc/v1/cache' }
+            });
+
+            // Register ad units
+            pbjs.addAdUnits([videoAdUnit, ...bannerAdUnits]);
+        });
+
+        /*****************************************************************
+         * Video logic — request/refresh independently
+         *****************************************************************/
+        let videoRetryTimeoutId = null;
+        const videoRetryMs = 30_000;
+
+        function clearVideoRetry() {
+            if (videoRetryTimeoutId) { clearTimeout(videoRetryTimeoutId); videoRetryTimeoutId = null; }
+        }
+        function requestVideoAd() {
+            clearVideoRetry();
+            console.log('→ Requesting VIDEO auction');
+            pbjs.requestBids({ adUnits: [videoAdUnit] });
+        }
+        function retryVideoLater() {
+            console.warn('⚠️ No video ad. Retrying in', videoRetryMs / 1000, 's');
+            clearVideoRetry();
+            videoRetryTimeoutId = setTimeout(requestVideoAd, videoRetryMs);
+        }
+
+        // Subscribe before first auction
+        pbjs.que.push(function () {
+            pbjs.onEvent('videoBidError', retryVideoLater);
+            pbjs.onEvent('videoSetupComplete', function () {
+                const player = videojs('player');
+
+                // Content
+                player.loadMedia({
+                    src: 'https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                    type: 'video/mp4',
+                    id: 'bbb', title: 'Big Buck Bunny'
+                });
+
+                player.on('adserror', retryVideoLater);
+                player.on('adskip', retryVideoLater);
+
+                // When an ad ends, immediately fetch the next preroll
+                player.on('adend', requestVideoAd);
+
+                // First preroll
+                requestVideoAd();
+            });
+        });
+
+        /*****************************************************************
+         * Banners: initial request + 30s refresh cycle
+         *****************************************************************/
+        const PREBID_TIMEOUT = 2000;
+        const FAILSAFE_TIMEOUT = 3000;
+        let refreshCount = 0;
+
+        function requestBannerBidsAndRefresh(slots) {
+            console.log('→ Requesting BANNER auction (N=' + (refreshCount + 1) + ')');
+            pbjs.requestBids({
+                adUnits: bannerAdUnits,
+                bidsBackHandler: function () {
+                    pbjs.setTargetingForGPTAsync();
+                    googletag.cmd.push(function () {
+                        // Optional: pass a refresh counter to GAM
+                        googletag.pubads().setTargeting('refresh_N', String(++refreshCount));
+                        if (slots && slots.length) {
+                            googletag.pubads().refresh(slots);
+                        } else {
+                            googletag.pubads().refresh();
+                        }
+                    });
+                },
+                timeout: PREBID_TIMEOUT
+            });
+
+            // Failsafe to ensure GPT gets called
+            setTimeout(function () {
+                pbjs.setTargetingForGPTAsync();
+                googletag.cmd.push(function () {
+                    googletag.pubads().refresh(slots || [slotM, slotL]);
+                });
+            }, FAILSAFE_TIMEOUT);
+        }
+
+        // Kick off once DOM is ready
+        document.addEventListener('DOMContentLoaded', function () {
+            // Display slots (after GPT enabled)
+            googletag.cmd.push(function () {
+                googletag.display('div_display_m');
+                googletag.display('div_display_l');
+            });
+
+            // Initial banner load
+            requestBannerBidsAndRefresh([slotM, slotL]);
+
+            // 30-second refresh loop for banners ONLY
+            setInterval(function () {
+                requestBannerBidsAndRefresh([slotM, slotL]);
+            }, 30000);
+        });
+    </script>
+</body>
+
+</html>
