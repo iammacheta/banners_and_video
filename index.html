@@ -333,7 +333,7 @@
      * Video logic — request/refresh independently
      *****************************************************************/
     let videoRetryTimeoutId = null;
-    const videoRetryMs = 30_000;
+    const videoRetryMs = 45_000;
 
     function clearVideoRetry() {
       if (videoRetryTimeoutId) { clearTimeout(videoRetryTimeoutId); videoRetryTimeoutId = null; }
@@ -386,6 +386,7 @@
       pbjs.requestBids({
         adUnits: bannerAdUnits,
         bidsBackHandler: function () {
+          bidsBackHandled = true;
           pbjs.setTargetingForGPTAsync();
           googletag.cmd.push(function () {
             googletag.pubads().setTargeting('refresh_N', String(++refreshCount));
@@ -395,12 +396,14 @@
         timeout: PREBID_TIMEOUT
       });
 
-      // Failsafe to ensure GPT gets called
+      // Failsafe
       setTimeout(function () {
-        pbjs.setTargetingForGPTAsync();
-        googletag.cmd.push(function () {
-          googletag.pubads().refresh(slots || [slotM, slotL]);
-        });
+        if (!bidsBackHandled) {
+          pbjs.setTargetingForGPTAsync();
+          googletag.cmd.push(function () {
+            googletag.pubads().refresh(slots || [slotM, slotL]);
+          });
+        }
       }, FAILSAFE_TIMEOUT);
     }
 
